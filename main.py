@@ -24,7 +24,7 @@ class SoftwareUpdater(QMainWindow):
         self.current_version = None
         self.latest_version = None
         self.backup_path = "backups"
-        self.github_repo = "SkvorikovCode/your-repo-name"  # Замените на ваш репозиторий
+        self.github_repo = "SkvorikovCode/software-update-controller"  # Замените на ваш репозиторий
         
         # Создаем центральный виджет
         central_widget = QWidget()
