@@ -25,11 +25,12 @@ class SoftwareUpdater(QMainWindow):
         self.latest_version = None
         self.backup_path = "backups"
         self.temp_path = "temp"
+        self.releases_path = "releases"
         self.github_repo = "SkvorikovCode/software-update-controller"
         self.github_api_url = f"https://api.github.com/repos/{self.github_repo}/releases/latest"
         
         # Создаем необходимые директории
-        for path in [self.backup_path, self.temp_path]:
+        for path in [self.backup_path, self.temp_path, self.releases_path]:
             if not os.path.exists(path):
                 os.makedirs(path)
         
@@ -110,6 +111,9 @@ class SoftwareUpdater(QMainWindow):
     def check_updates(self):
         """Проверка наличия обновлений на GitHub"""
         try:
+            # Очищаем прогресс бар
+            self.progress.setValue(0)
+            
             response = requests.get(self.github_api_url)
             if response.status_code == 404:
                 QMessageBox.warning(self, "Ошибка", 
@@ -139,23 +143,81 @@ class SoftwareUpdater(QMainWindow):
                                       "В релизе не найден архив обновления (.zip)")
                     return
                 
+                # Скачиваем актуальную версию в releases
+                release_dir = os.path.join(self.releases_path, str(self.latest_version))
+                if not os.path.exists(release_dir):
+                    os.makedirs(release_dir)
+                
+                # Загружаем архив
+                self.progress.setValue(10)
+                zip_path = os.path.join(release_dir, self.update_filename)
+                
+                response = requests.get(self.update_url, stream=True)
+                if response.status_code != 200:
+                    raise Exception(f"Ошибка загрузки: {response.status_code}")
+                
+                total_size = int(response.headers.get('content-length', 0))
+                with open(zip_path, 'wb') as f:
+                    if total_size == 0:
+                        f.write(response.content)
+                    else:
+                        downloaded = 0
+                        for data in response.iter_content(chunk_size=4096):
+                            downloaded += len(data)
+                            f.write(data)
+                            progress = int((downloaded / total_size) * 40) + 10
+                            self.progress.setValue(progress)
+                
+                # Распаковываем архив
+                self.progress.setValue(60)
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(release_dir)
+                
+                self.progress.setValue(80)
+                
+                # Проверяем что архив не пустой
+                files = []
+                for root, dirs, filenames in os.walk(release_dir):
+                    files.extend(filenames)
+                
+                if not files:
+                    raise Exception("Архив обновления пуст")
+                
+                # Сохраняем список файлов для установки
+                self.update_files = []
+                for root, dirs, filenames in os.walk(release_dir):
+                    for filename in filenames:
+                        if filename != self.update_filename:  # Пропускаем сам архив
+                            file_path = os.path.join(root, filename)
+                            rel_path = os.path.relpath(file_path, release_dir)
+                            self.update_files.append((file_path, rel_path))
+                
+                self.progress.setValue(100)
+                
             except Exception as e:
                 QMessageBox.warning(self, "Ошибка", 
-                                  "Неверный формат версии в релизе. Используйте формат v1.0.0")
+                                  f"Ошибка при обработке релиза: {str(e)}")
+                if os.path.exists(release_dir):
+                    shutil.rmtree(release_dir)
                 return
             
             if self.current_version and self.latest_version > self.current_version:
                 self.install_button.setEnabled(True)
+                files_list = "\n".join(f"- {rel_path}" for _, rel_path in self.update_files)
                 QMessageBox.information(self, "Обновление доступно", 
-                                     f"Доступна новая версия: {self.latest_version}")
+                                     f"Доступна новая версия: {self.latest_version}\n"
+                                     f"Файлы для обновления:\n{files_list}\n"
+                                     f"Сохранены в: {release_dir}")
             else:
                 QMessageBox.information(self, "Обновления не требуются", 
                                      "У вас установлена последняя версия")
-                
+            
         except requests.exceptions.RequestException as e:
             QMessageBox.warning(self, "Ошибка", f"Ошибка сети: {str(e)}")
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Ошибка проверки обновлений: {str(e)}")
+        finally:
+            self.progress.setValue(0)
     
     def create_backup(self):
         """Создание резервной копии текущего ПО"""
@@ -176,82 +238,49 @@ class SoftwareUpdater(QMainWindow):
     
     def install_update(self):
         """Установка обновления"""
-        if not hasattr(self, 'update_url'):
+        if not hasattr(self, 'latest_version'):
             QMessageBox.warning(self, "Ошибка", "Сначала проверьте наличие обновлений")
             return
             
         if self.create_backup():
             try:
-                # Загрузка обновления
-                self.progress.setValue(0)
-                response = requests.get(self.update_url, stream=True)
-                if response.status_code != 200:
-                    raise Exception(f"Ошибка загрузки: {response.status_code}")
+                # Путь к распакованному релизу
+                release_dir = os.path.join(self.releases_path, str(self.latest_version))
+                if not os.path.exists(release_dir):
+                    raise Exception("Файлы обновления не найдены. Проверьте обновления снова.")
                 
-                # Временный файл для загрузки
-                zip_path = os.path.join(self.temp_path, self.update_filename)
-                total_size = int(response.headers.get('content-length', 0))
-                
-                # Загрузка архива
-                with open(zip_path, 'wb') as f:
-                    if total_size == 0:
-                        f.write(response.content)
-                    else:
-                        downloaded = 0
-                        for data in response.iter_content(chunk_size=4096):
-                            downloaded += len(data)
-                            f.write(data)
-                            progress = int((downloaded / total_size) * 40)
-                            self.progress.setValue(progress)
-                
-                # Распаковка архива
-                self.progress.setValue(50)
-                extract_path = os.path.join(self.temp_path, "update")
-                if os.path.exists(extract_path):
-                    shutil.rmtree(extract_path)
-                os.makedirs(extract_path)
-                
-                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(extract_path)
-                
-                self.progress.setValue(70)
-                
-                # Поиск файла прошивки в распакованных файлах
-                firmware_file = None
-                for root, dirs, files in os.walk(extract_path):
-                    for file in files:
-                        if file.endswith('.hex'):  # или другое расширение вашего файла прошивки
-                            firmware_file = os.path.join(root, file)
-                            break
-                    if firmware_file:
-                        break
-                
-                if not firmware_file:
-                    raise Exception("Файл прошивки не найден в архиве")
+                if not hasattr(self, 'update_files') or not self.update_files:
+                    raise Exception("Список файлов для обновления пуст")
                 
                 # Установка обновления
+                self.progress.setValue(0)
                 port = self.port_combo.currentText()
                 with serial.Serial(port, 9600, timeout=1) as ser:
                     ser.write(b"update\n")
-                    # Здесь должна быть логика отправки файла на устройство
-                    with open(firmware_file, 'rb') as f:
-                        # TODO: Реализовать протокол передачи файла
-                        pass
+                    
+                    # Отправляем количество файлов
+                    num_files = len(self.update_files)
+                    ser.write(f"{num_files}\n".encode())
+                    
+                    # Отправляем каждый файл
+                    for i, (file_path, rel_path) in enumerate(self.update_files):
+                        # Отправляем имя файла
+                        ser.write(f"{rel_path}\n".encode())
+                        
+                        # Отправляем содержимое файла
+                        with open(file_path, 'rb') as f:
+                            # TODO: Реализовать протокол передачи файла
+                            pass
+                        
+                        # Обновляем прогресс
+                        progress = int((i + 1) / num_files * 100)
+                        self.progress.setValue(progress)
                     
                 self.progress.setValue(100)
-                
-                # Очистка временных файлов
-                shutil.rmtree(extract_path)
-                os.remove(zip_path)
-                
                 QMessageBox.information(self, "Успех", "Обновление успешно установлено")
                 
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Ошибка установки обновления: {str(e)}")
-                # Очистка в случае ошибки
-                if os.path.exists(self.temp_path):
-                    shutil.rmtree(self.temp_path)
-                os.makedirs(self.temp_path)
     
     def rollback_version(self):
         """Откат к предыдущей версии"""
