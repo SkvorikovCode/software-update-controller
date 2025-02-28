@@ -9,16 +9,35 @@ import serial
 import serial.tools.list_ports
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QHBoxLayout, QComboBox, QPushButton, QLabel,
-                           QProgressBar, QMessageBox)
+                           QProgressBar, QMessageBox, QFrame, QSpacerItem,
+                           QSizePolicy)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QFont, QIcon
 from qt_material import apply_stylesheet
 from semantic_version import Version
+
+class CustomFrame(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShadow(QFrame.Shadow.Raised)
+        self.setStyleSheet("""
+            CustomFrame {
+                background-color: rgba(255, 255, 255, 0.05);
+                border-radius: 10px;
+                padding: 15px;
+                margin: 5px;
+            }
+        """)
 
 class SoftwareUpdater(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Обновление программного обеспечения")
-        self.setMinimumSize(800, 500)
+        self.setMinimumSize(900, 600)
+        
+        # Установка иконки приложения
+        self.setWindowIcon(QIcon("icons/app.svg"))
         
         # Инициализация переменных
         self.current_version = None
@@ -37,35 +56,96 @@ class SoftwareUpdater(QMainWindow):
         # Создаем центральный виджет
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Заголовок
+        title_frame = CustomFrame()
+        title_layout = QVBoxLayout(title_frame)
+        title_label = QLabel("Система обновления ПО")
+        title_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_layout.addWidget(title_label)
         
         # Информация о версиях
-        version_layout = QVBoxLayout()
+        version_frame = CustomFrame()
+        version_layout = QVBoxLayout(version_frame)
+        version_layout.setSpacing(10)
+        
         self.current_version_label = QLabel("Текущая версия: Проверка...")
         self.latest_version_label = QLabel("Доступная версия: Проверка...")
+        self.current_version_label.setFont(QFont("Segoe UI", 11))
+        self.latest_version_label.setFont(QFont("Segoe UI", 11))
+        
         version_layout.addWidget(self.current_version_label)
         version_layout.addWidget(self.latest_version_label)
         
         # COM порты
-        port_layout = QHBoxLayout()
+        port_frame = CustomFrame()
+        port_layout = QHBoxLayout(port_frame)
+        port_layout.setSpacing(15)
+        
         self.port_label = QLabel("USB порт:")
+        self.port_label.setFont(QFont("Segoe UI", 11))
         self.port_combo = QComboBox()
+        self.port_combo.setMinimumWidth(200)
+        self.port_combo.setFont(QFont("Segoe UI", 10))
+        
         self.refresh_button = QPushButton("Обновить список")
+        self.refresh_button.setFont(QFont("Segoe UI", 10))
         self.refresh_button.clicked.connect(self.update_ports)
+        self.refresh_button.setMinimumWidth(150)
+        
+        # Добавляем иконки для кнопок
+        self.refresh_button.setIcon(QIcon("icons/refresh.svg"))
         
         port_layout.addWidget(self.port_label)
         port_layout.addWidget(self.port_combo)
         port_layout.addWidget(self.refresh_button)
+        port_layout.addStretch()
         
         # Прогресс бар
+        progress_frame = CustomFrame()
+        progress_layout = QVBoxLayout(progress_frame)
+        
+        progress_label = QLabel("Прогресс операции:")
+        progress_label.setFont(QFont("Segoe UI", 11))
         self.progress = QProgressBar()
+        self.progress.setMinimumHeight(25)
         self.progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress.setFont(QFont("Segoe UI", 10))
+        self.progress.setStyleSheet("""
+            QProgressBar {
+                border-radius: 5px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                border-radius: 5px;
+            }
+        """)
+        
+        progress_layout.addWidget(progress_label)
+        progress_layout.addWidget(self.progress)
         
         # Кнопки управления
-        button_layout = QHBoxLayout()
+        button_frame = CustomFrame()
+        button_layout = QHBoxLayout(button_frame)
+        button_layout.setSpacing(15)
+        
         self.check_updates_button = QPushButton("Проверить обновления")
         self.install_button = QPushButton("Установить")
         self.rollback_button = QPushButton("Откатить к предыдущей версии")
+        
+        # Добавляем иконки для кнопок
+        self.check_updates_button.setIcon(QIcon("icons/check.svg"))
+        self.install_button.setIcon(QIcon("icons/install.svg"))
+        self.rollback_button.setIcon(QIcon("icons/rollback.svg"))
+        
+        for button in [self.check_updates_button, self.install_button, self.rollback_button]:
+            button.setFont(QFont("Segoe UI", 10))
+            button.setMinimumHeight(40)
+            button.setMinimumWidth(200)
         
         self.check_updates_button.clicked.connect(self.check_updates)
         self.install_button.clicked.connect(self.install_update)
@@ -78,12 +158,17 @@ class SoftwareUpdater(QMainWindow):
         button_layout.addWidget(self.install_button)
         button_layout.addWidget(self.rollback_button)
         
-        # Добавляем все компоненты в главный layout
-        layout.addLayout(version_layout)
-        layout.addLayout(port_layout)
-        layout.addWidget(self.progress)
-        layout.addLayout(button_layout)
-        layout.addStretch()
+        # Добавляем все фреймы в главный layout
+        main_layout.addWidget(title_frame)
+        main_layout.addWidget(version_frame)
+        main_layout.addWidget(port_frame)
+        main_layout.addWidget(progress_frame)
+        main_layout.addWidget(button_frame)
+        main_layout.addStretch()
+        
+        # Статус бар
+        self.statusBar().showMessage("Готов к работе")
+        self.statusBar().setFont(QFont("Segoe UI", 10))
         
         # Инициализация
         self.update_ports()
@@ -307,11 +392,39 @@ class SoftwareUpdater(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    apply_stylesheet(app, theme='dark_teal.xml')
+    apply_stylesheet(app, theme='dark_teal.xml', invert_secondary=True)
+    
+    # Дополнительные стили для темной темы
+    app.setStyleSheet("""
+        QMainWindow {
+            background-color: #1e1e1e;
+        }
+        QMessageBox {
+            background-color: #2d2d2d;
+        }
+        QMessageBox QLabel {
+            color: #ffffff;
+            font-size: 11pt;
+        }
+        QMessageBox QPushButton {
+            min-width: 100px;
+            min-height: 30px;
+            font-size: 10pt;
+        }
+        QComboBox {
+            padding: 5px;
+            min-height: 25px;
+        }
+        QPushButton {
+            padding: 5px 15px;
+        }
+        QLabel {
+            color: #ffffff;
+        }
+    """)
     
     window = SoftwareUpdater()
     window.show()
-    
     sys.exit(app.exec())
 
 if __name__ == '__main__':
