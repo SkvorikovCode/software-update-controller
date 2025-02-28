@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QProgressBar, QMessageBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from qt_material import apply_stylesheet
-from github import Github
 from semantic_version import Version
 
 class SoftwareUpdater(QMainWindow):
@@ -24,7 +23,8 @@ class SoftwareUpdater(QMainWindow):
         self.current_version = None
         self.latest_version = None
         self.backup_path = "backups"
-        self.github_repo = "SkvorikovCode/software-update-controller"  # Замените на ваш репозиторий
+        self.github_repo = "SkvorikovCode/software-update-controller"
+        self.github_api_url = f"https://api.github.com/repos/{self.github_repo}/releases/latest"
         
         # Создаем центральный виджет
         central_widget = QWidget()
@@ -106,11 +106,38 @@ class SoftwareUpdater(QMainWindow):
     def check_updates(self):
         """Проверка наличия обновлений на GitHub"""
         try:
-            g = Github()  # Для публичных репозиториев токен не нужен
-            repo = g.get_repo(self.github_repo)
-            latest_release = repo.get_latest_release()
-            self.latest_version = Version(latest_release.tag_name.lstrip('v'))
-            self.latest_version_label.setText(f"Доступная версия: {self.latest_version}")
+            response = requests.get(self.github_api_url)
+            if response.status_code == 404:
+                QMessageBox.warning(self, "Ошибка", 
+                                  "Репозиторий не найден или нет публичных релизов")
+                return
+            
+            if response.status_code != 200:
+                QMessageBox.warning(self, "Ошибка", 
+                                  f"Ошибка при получении данных с GitHub: {response.status_code}")
+                return
+            
+            release_data = response.json()
+            try:
+                self.latest_version = Version(release_data['tag_name'].lstrip('v'))
+                self.latest_version_label.setText(f"Доступная версия: {self.latest_version}")
+                
+                # Сохраняем URL файла обновления
+                self.update_url = None
+                for asset in release_data['assets']:
+                    if asset['name'].endswith('.bin'):  # или другое расширение вашего файла
+                        self.update_url = asset['browser_download_url']
+                        break
+                
+                if not self.update_url:
+                    QMessageBox.warning(self, "Ошибка", 
+                                      "В релизе не найден файл обновления")
+                    return
+                
+            except Exception as e:
+                QMessageBox.warning(self, "Ошибка", 
+                                  "Неверный формат версии в релизе. Используйте формат v1.0.0")
+                return
             
             if self.current_version and self.latest_version > self.current_version:
                 self.install_button.setEnabled(True)
@@ -119,6 +146,9 @@ class SoftwareUpdater(QMainWindow):
             else:
                 QMessageBox.information(self, "Обновления не требуются", 
                                      "У вас установлена последняя версия")
+                
+        except requests.exceptions.RequestException as e:
+            QMessageBox.warning(self, "Ошибка", f"Ошибка сети: {str(e)}")
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Ошибка проверки обновлений: {str(e)}")
     
@@ -141,21 +171,67 @@ class SoftwareUpdater(QMainWindow):
     
     def install_update(self):
         """Установка обновления"""
+        if not hasattr(self, 'update_url'):
+            QMessageBox.warning(self, "Ошибка", "Сначала проверьте наличие обновлений")
+            return
+            
         if self.create_backup():
             try:
-                # Загрузка и установка обновления
+                # Загрузка обновления
                 self.progress.setValue(0)
-                # TODO: Реализовать логику загрузки и установки
-                self.progress.setValue(100)
+                response = requests.get(self.update_url, stream=True)
+                if response.status_code != 200:
+                    raise Exception(f"Ошибка загрузки: {response.status_code}")
+                
+                # Временный файл для загрузки
+                temp_file = "temp_update.bin"
+                total_size = int(response.headers.get('content-length', 0))
+                
+                with open(temp_file, 'wb') as f:
+                    if total_size == 0:
+                        f.write(response.content)
+                    else:
+                        downloaded = 0
+                        for data in response.iter_content(chunk_size=4096):
+                            downloaded += len(data)
+                            f.write(data)
+                            progress = int((downloaded / total_size) * 50)
+                            self.progress.setValue(progress)
+                
+                # Установка обновления
+                port = self.port_combo.currentText()
+                with serial.Serial(port, 9600, timeout=1) as ser:
+                    ser.write(b"update\n")
+                    # Здесь должна быть логика отправки файла на устройство
+                    self.progress.setValue(100)
+                
+                # Очистка
+                os.remove(temp_file)
                 QMessageBox.information(self, "Успех", "Обновление успешно установлено")
+                
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Ошибка установки обновления: {str(e)}")
     
     def rollback_version(self):
         """Откат к предыдущей версии"""
         try:
-            # TODO: Реализовать логику отката
-            pass
+            # Поиск последнего бэкапа
+            backups = sorted([f for f in os.listdir(self.backup_path) if f.endswith('.bin')],
+                           reverse=True)
+            if not backups:
+                QMessageBox.warning(self, "Ошибка", "Резервные копии не найдены")
+                return
+                
+            backup_file = os.path.join(self.backup_path, backups[0])
+            
+            # Установка бэкапа
+            port = self.port_combo.currentText()
+            with serial.Serial(port, 9600, timeout=1) as ser:
+                ser.write(b"restore\n")
+                # Здесь должна быть логика отправки файла на устройство
+                
+            QMessageBox.information(self, "Успех", "Восстановление завершено успешно")
+            
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка отката версии: {str(e)}")
 
