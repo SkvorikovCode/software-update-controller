@@ -3,6 +3,7 @@ import os
 import json
 import shutil
 import requests
+import zipfile
 from datetime import datetime
 import serial
 import serial.tools.list_ports
@@ -23,8 +24,14 @@ class SoftwareUpdater(QMainWindow):
         self.current_version = None
         self.latest_version = None
         self.backup_path = "backups"
+        self.temp_path = "temp"
         self.github_repo = "SkvorikovCode/software-update-controller"
         self.github_api_url = f"https://api.github.com/repos/{self.github_repo}/releases/latest"
+        
+        # Создаем необходимые директории
+        for path in [self.backup_path, self.temp_path]:
+            if not os.path.exists(path):
+                os.makedirs(path)
         
         # Создаем центральный виджет
         central_widget = QWidget()
@@ -78,9 +85,6 @@ class SoftwareUpdater(QMainWindow):
         layout.addStretch()
         
         # Инициализация
-        if not os.path.exists(self.backup_path):
-            os.makedirs(self.backup_path)
-            
         self.update_ports()
         self.check_current_version()
     
@@ -125,13 +129,14 @@ class SoftwareUpdater(QMainWindow):
                 # Сохраняем URL файла обновления
                 self.update_url = None
                 for asset in release_data['assets']:
-                    if asset['name'].endswith('.bin'):  # или другое расширение вашего файла
+                    if asset['name'].endswith('.zip'):  # Ищем zip архив
                         self.update_url = asset['browser_download_url']
+                        self.update_filename = asset['name']
                         break
                 
                 if not self.update_url:
                     QMessageBox.warning(self, "Ошибка", 
-                                      "В релизе не найден файл обновления")
+                                      "В релизе не найден архив обновления (.zip)")
                     return
                 
             except Exception as e:
@@ -184,10 +189,11 @@ class SoftwareUpdater(QMainWindow):
                     raise Exception(f"Ошибка загрузки: {response.status_code}")
                 
                 # Временный файл для загрузки
-                temp_file = "temp_update.bin"
+                zip_path = os.path.join(self.temp_path, self.update_filename)
                 total_size = int(response.headers.get('content-length', 0))
                 
-                with open(temp_file, 'wb') as f:
+                # Загрузка архива
+                with open(zip_path, 'wb') as f:
                     if total_size == 0:
                         f.write(response.content)
                     else:
@@ -195,22 +201,57 @@ class SoftwareUpdater(QMainWindow):
                         for data in response.iter_content(chunk_size=4096):
                             downloaded += len(data)
                             f.write(data)
-                            progress = int((downloaded / total_size) * 50)
+                            progress = int((downloaded / total_size) * 40)
                             self.progress.setValue(progress)
+                
+                # Распаковка архива
+                self.progress.setValue(50)
+                extract_path = os.path.join(self.temp_path, "update")
+                if os.path.exists(extract_path):
+                    shutil.rmtree(extract_path)
+                os.makedirs(extract_path)
+                
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_path)
+                
+                self.progress.setValue(70)
+                
+                # Поиск файла прошивки в распакованных файлах
+                firmware_file = None
+                for root, dirs, files in os.walk(extract_path):
+                    for file in files:
+                        if file.endswith('.hex'):  # или другое расширение вашего файла прошивки
+                            firmware_file = os.path.join(root, file)
+                            break
+                    if firmware_file:
+                        break
+                
+                if not firmware_file:
+                    raise Exception("Файл прошивки не найден в архиве")
                 
                 # Установка обновления
                 port = self.port_combo.currentText()
                 with serial.Serial(port, 9600, timeout=1) as ser:
                     ser.write(b"update\n")
                     # Здесь должна быть логика отправки файла на устройство
-                    self.progress.setValue(100)
+                    with open(firmware_file, 'rb') as f:
+                        # TODO: Реализовать протокол передачи файла
+                        pass
+                    
+                self.progress.setValue(100)
                 
-                # Очистка
-                os.remove(temp_file)
+                # Очистка временных файлов
+                shutil.rmtree(extract_path)
+                os.remove(zip_path)
+                
                 QMessageBox.information(self, "Успех", "Обновление успешно установлено")
                 
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Ошибка установки обновления: {str(e)}")
+                # Очистка в случае ошибки
+                if os.path.exists(self.temp_path):
+                    shutil.rmtree(self.temp_path)
+                os.makedirs(self.temp_path)
     
     def rollback_version(self):
         """Откат к предыдущей версии"""
